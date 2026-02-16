@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>API Type Detector</title>
+    <meta name="manifest.type" content="browser_action" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div class="container">
+      <h1>API Type Detector</h1>
+      
+      <div class="section">
+        <button id="openOptionsBtn" class="btn-primary btn-large">
+          <span class="icon">⚙️</span>
+          結果を見る（オプションページを開く）
+        </button>
+      </div>
+
+      <div class="section">
+        <h2>API Routeを登録</h2>
+        <div class="mode-selector">
+          <label>
+            <input type="radio" name="mode" value="pattern" checked />
+            パターンモード
+          </label>
+          <label>
+            <input type="radio" name="mode" value="auto" />
+            自動検出モード
+          </label>
+        </div>
+        <div class="form" id="patternForm">
+          <input type="text" id="routeName" placeholder="Route名 (例: User API)" />
+          <input type="text" id="routePattern" placeholder="URLパターン (例: https://example.com/api/users/:id)" />
+          <button id="addRoute">追加</button>
+        </div>
+        <div class="form" id="autoForm" style="display: none;">
+          <input type="text" id="autoRouteName" placeholder="Route名 (例: User API)" />
+          <input type="text" id="autoRouteUrl" placeholder="ベースURL (例: https://example.com/api)" />
+          <button id="addAutoRoute">追加</button>
+        </div>
+        <p class="hint" id="patternHint">パターンモード: URLパターンを指定します。:id や :userId などでパラメータを指定できます（例: /api/users/:id/posts）</p>
+        <p class="hint" id="autoHint" style="display: none;">自動検出モード: ベースURLを登録すると、そこから派生するエンドポイントとメソッドを自動的に検出・分類します</p>
+      </div>
+
+      <div class="section">
+        <h2>登録済みAPI Routes</h2>
+        <div id="routeList" class="route-list"></div>
+      </div>
+
+      <div class="section">
+        <h2>URL ツール</h2>
+        
+        <div class="tool-group">
+          <label>URL Encode / Decode</label>
+          <textarea id="urlEncodeInput" placeholder="エンコード・デコードするテキストを入力"></textarea>
+          <div class="tool-buttons">
+            <button id="encodeBtn" class="btn-tool">エンコード</button>
+            <button id="decodeBtn" class="btn-tool">デコード</button>
+            <button id="copyEncodeBtn" class="btn-tool">コピー</button>
+          </div>
+          <textarea id="urlEncodeOutput" placeholder="結果" readonly></textarea>
+        </div>
+
+        <div class="tool-group">
+          <label>クエリパラメータ除去</label>
+          <textarea id="urlCleanInput" placeholder="URLを入力（1行に1つ）"></textarea>
+          <div class="tool-buttons">
+            <button id="cleanUrlBtn" class="btn-tool">クエリパラメータを除去</button>
+            <button id="copyCleanBtn" class="btn-tool">コピー</button>
+          </div>
+          <textarea id="urlCleanOutput" placeholder="結果" readonly></textarea>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

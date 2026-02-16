@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>API Type Detector - Results</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: 'Segoe UI', 'Segoe UI Variable', 'Noto Sans JP', sans-serif;
+        background: #1e1e1e;
+        color: #d4d4d4;
+      }
+
+      .layout {
+        display: flex;
+        min-height: 100vh;
+      }
+
+      .sidebar {
+        width: 280px;
+        background: #252526;
+        border-right: 1px solid #333;
+        padding: 14px 0;
+        overflow-y: auto;
+      }
+
+      .sidebar-header {
+        padding: 0 16px 12px;
+        border-bottom: 1px solid #333;
+        margin-bottom: 10px;
+      }
+
+      .sidebar-title {
+        font-size: 12px;
+        letter-spacing: 1px;
+        color: #cccccc;
+        text-transform: uppercase;
+        margin-bottom: 6px;
+      }
+
+      .project-name {
+        font-size: 14px;
+        color: #9cdcfe;
+        font-weight: 600;
+      }
+
+      .explorer-tree {
+        padding: 4px 0 12px;
+      }
+
+      .tree-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        padding-left: calc(var(--depth, 0) * 12px + 10px);
+        cursor: pointer;
+        user-select: none;
+        transition: background 0.15s;
+      }
+
+      .tree-row:hover {
+        background: #2a2d2e;
+      }
+
+      .tree-row.active {
+        background: #094771;
+      }
+
+      .tree-chevron {
+        width: 14px;
+        text-align: center;
+        color: #c5c5c5;
+        font-size: 12px;
+      }
+
+      .tree-icon {
+        width: 16px;
+        text-align: center;
+        font-size: 13px;
+      }
+
+      .tree-label {
+        font-size: 13px;
+        color: #d4d4d4;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .tree-badge {
+        margin-left: auto;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+
+      .tree-children {
+        margin-left: 0;
+      }
+
+      .main-content {
+        flex: 1;
+        padding: 18px 24px;
+        overflow-y: auto;
+      }
+
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 18px;
+      }
+
+      .header h1 {
+        font-size: 22px;
+        color: #9cdcfe;
+      }
+
+      .header-actions {
+        display: flex;
+        gap: 10px;
+      }
+
+      .btn {
+        padding: 8px 12px;
+        border: 1px solid #3c3c3c;
+        border-radius: 4px;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        background: #2d2d2d;
+        color: #d4d4d4;
+        transition: all 0.2s;
+      }
+
+      .btn-primary {
+        background: #0e639c;
+        border-color: #0e639c;
+        color: #fff;
+      }
+
+      .btn-primary:hover {
+        background: #1177bb;
+      }
+
+      .btn-danger {
+        background: #c74e39;
+        border-color: #c74e39;
+        color: #fff;
+      }
+
+      .btn-danger:hover {
+        background: #d16969;
+      }
+
+      .result-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 10px 0 16px;
+      }
+
+      .result-title {
+        font-size: 18px;
+        font-weight: 600;
+        color: #dcdcaa;
+      }
+
+      .result-path {
+        font-family: 'Cascadia Code', 'Fira Code', monospace;
+        font-size: 12px;
+        color: #9cdcfe;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 100%;
+      }
+
+      .method-badge {
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+
+      .method-any { background: #495057; color: #fff; }
+      .method-auto { background: #845ef7; color: #fff; }
+
+      .method-get {
+        background: #51cf66;
+        color: #1a1a1a;
+      }
+
+      .method-post {
+        background: #4dabf7;
+        color: white;
+      }
+
+      .method-put {
+        background: #ff922b;
+        color: white;
+      }
+
+      .method-delete {
+        background: #ff6b6b;
+        color: white;
+      }
+
+      .method-patch {
+        background: #94d82d;
+        color: #1a1a1a;
+      }
+
+      .subsection {
+        margin-top: 16px;
+      }
+
+      .subsection-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: #c5c5c5;
+        margin-bottom: 10px;
+      }
+
+      .params-table {
+        width: 100%;
+        border-collapse: collapse;
+        background: #252526;
+        border-radius: 4px;
+        overflow: hidden;
+        margin-bottom: 16px;
+        border: 1px solid #333;
+      }
+
+      .params-table th,
+      .params-table td {
+        padding: 10px;
+        text-align: left;
+        border-bottom: 1px solid #333;
+      }
+
+      .params-table th {
+        background: #2d2d2d;
+        color: #c5c5c5;
+        font-size: 13px;
+        font-weight: 600;
+        text-transform: uppercase;
+      }
+
+      .params-table td {
+        font-size: 14px;
+        color: #e0e0e0;
+      }
+
+      .param-name {
+        font-family: 'Cascadia Code', 'Fira Code', monospace;
+        color: #9cdcfe;
+      }
+
+      .param-types {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+
+      .type-badge {
+        padding: 2px 6px;
+        background: #3c3c3c;
+        border-radius: 3px;
+        font-size: 11px;
+        font-family: 'Cascadia Code', 'Fira Code', monospace;
+        color: #dcdcaa;
+        cursor: pointer;
+        transition: background 0.2s;
+      }
+
+      .type-badge:hover {
+        background: #505050;
+      }
+
+      .type-definition {
+        background: #1e1e1e;
+        padding: 16px;
+        border-radius: 6px;
+        border: 1px solid #333;
+        position: relative;
+      }
+
+      .type-definition pre {
+        margin: 0;
+        font-family: 'Cascadia Code', 'Fira Code', monospace;
+        color: #d4d4d4;
+        font-size: 13px;
+        line-height: 1.6;
+        white-space: pre-wrap;
+        overflow-x: auto;
+      }
+
+      .copy-btn {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        padding: 6px 12px;
+        background: #3c3c3c;
+        color: #d4d4d4;
+        border: none;
+        border-radius: 4px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+
+      .copy-btn:hover {
+        background: #505050;
+      }
+
+      .empty {
+        text-align: center;
+        padding: 60px 20px;
+        color: #868e96;
+      }
+
+      .empty-icon {
+        font-size: 48px;
+        margin-bottom: 16px;
+      }
+
+      .empty-text {
+        font-size: 18px;
+        margin-bottom: 8px;
+      }
+
+      .empty-hint {
+        font-size: 14px;
+        color: #6c757d;
+      }
+
+      .modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.8);
+        z-index: 1000;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .modal.active {
+        display: flex;
+      }
+
+      .modal-content {
+        background: #252526;
+        border: 1px solid #333;
+        border-radius: 8px;
+        padding: 24px;
+        max-width: 600px;
+        max-height: 80vh;
+        overflow-y: auto;
+      }
+
+      .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 16px;
+      }
+
+      .modal-title {
+        font-size: 18px;
+        font-weight: 600;
+        color: #9cdcfe;
+      }
+
+      .modal-close {
+        background: none;
+        border: none;
+        color: #c5c5c5;
+        font-size: 24px;
+        cursor: pointer;
+        padding: 0;
+        width: 32px;
+        height: 32px;
+      }
+
+      .modal-close:hover {
+        color: #fff;
+      }
+
+      .sample-list {
+        list-style: none;
+      }
+
+      .sample-list li {
+        padding: 8px 12px;
+        background: #1e1e1e;
+        border: 1px solid #333;
+        border-radius: 4px;
+        margin-bottom: 8px;
+        font-family: 'Cascadia Code', 'Fira Code', monospace;
+        font-size: 13px;
+        color: #d4d4d4;
+      }
+
+      .muted {
+        color: #9aa0a6;
+        font-size: 13px;
+        margin: 6px 0 4px 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <div class="sidebar-title">Explorer</div>
+          <div class="project-name">API Type Detector</div>
+        </div>
+        <div id="explorerTree" class="explorer-tree"></div>
+      </aside>
+      
+      <main class="main-content">
+        <div class="header">
+          <h1>API Type Detector</h1>
+          <div class="header-actions">
+            <button id="refreshBtn" class="btn btn-primary">🔄 更新</button>
+            <button id="clearAllBtn" class="btn btn-danger">🗑 全てクリア</button>
+          </div>
+        </div>
+        <div id="results"></div>
+      </main>
+    </div>
+
+    <div id="modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 class="modal-title" id="modalTitle">Sample Values</h3>
+          <button class="modal-close" id="modalClose">×</button>
+        </div>
+        <ul class="sample-list" id="modalSamples"></ul>
+      </div>
+    </div>
+
+    <script type="module" src="./index.ts"></script>
+  </body>
+</html>
