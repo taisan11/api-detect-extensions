@@ -4,3 +4,5 @@
 bun i # or npm or pnpm or yarn
 bun run build # or node
 ```
+## License
+MIT
