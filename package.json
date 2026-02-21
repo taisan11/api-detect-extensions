@@ -4,7 +4,7 @@
   "devDependencies": {
     "@wxt-dev/auto-icons": "^1.1.0",
     "typescript": "^5.9.3",
-    "wxt": "^0.20.6"
+    "wxt": "^0.20.17"
   },
   "description": "manifest.json description",
   "private": true,

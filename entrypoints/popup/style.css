@@ -116,6 +116,18 @@ button:active {
   line-height: 1.4;
 }
 
+.settings-row {
+  display: grid;
+  grid-template-columns: 1fr 120px auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.settings-row label {
+  font-size: 13px;
+  color: #adb5bd;
+}
+
 .tool-group {
   margin-bottom: 20px;
   padding: 16px;

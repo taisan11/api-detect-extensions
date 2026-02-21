@@ -1,3 +1,17 @@
+const compiledPatternCache = new Map<string, RegExp>();
+
+function getCompiledPattern(pattern: string): RegExp {
+  const cached = compiledPatternCache.get(pattern);
+  if (cached) {
+    return cached;
+  }
+
+  const regexPattern = pattern.includes(':') ? patternToRegex(pattern) : pattern;
+  const compiled = new RegExp(regexPattern);
+  compiledPatternCache.set(pattern, compiled);
+  return compiled;
+}
+
 /**
  * URLからクエリパラメータを除いたベースURLを取得
  */
@@ -101,18 +115,9 @@ export function patternToRegex(pattern: string): string {
  */
 export function matchesPattern(url: string, pattern: string): boolean {
   try {
-    // パターンが正規表現形式かチェック
-    if (pattern.includes(':')) {
-      // :param 形式の場合は正規表現に変換
-      const regexPattern = patternToRegex(pattern);
-      const regex = new RegExp(regexPattern);
-      const cleanUrl = getBaseUrl(url);
-      return regex.test(cleanUrl);
-    } else {
-      // 通常の正規表現として扱う
-      const regex = new RegExp(pattern);
-      return regex.test(url);
-    }
+    const regex = getCompiledPattern(pattern);
+    const target = pattern.includes(':') ? getBaseUrl(url) : url;
+    return regex.test(target);
   } catch (e) {
     console.error('Pattern matching error:', e);
     return false;

@@ -5,6 +5,7 @@ let currentData: StorageData = {
   routes: [],
   requests: [],
   types: [],
+  sampleLimit: 20,
 };
 let selectedRouteId: string | null = null;
 const expandedNodes = new Set<string>();
@@ -20,8 +21,6 @@ document.addEventListener('DOMContentLoaded', () => {
 function setupEventListeners() {
   // 更新ボタン
   document.getElementById('refreshBtn')?.addEventListener('click', async ()=>{
-    //型定義の再生成の要求
-    await browser.runtime.sendMessage({ type: 'REGENERATE_TYPES' });
     await loadData();
   });
   
@@ -44,14 +43,46 @@ function setupEventListeners() {
       document.getElementById('modal')!.classList.remove('active');
     }
   });
+
+  const results = document.getElementById('results');
+  results?.addEventListener('click', async (e) => {
+    const target = e.target as HTMLElement;
+    const badge = target.closest('.type-badge') as HTMLElement | null;
+    if (badge) {
+      const samplesJson = badge.getAttribute('data-samples');
+      if (!samplesJson) return;
+
+      try {
+        const samples = JSON.parse(samplesJson);
+        showModal('サンプル値', samples);
+      } catch (error) {
+        console.error('Failed to parse samples', error);
+      }
+      return;
+    }
+
+    const copyBtn = target.closest('.copy-btn') as HTMLElement | null;
+    if (!copyBtn) return;
+
+    const text = copyBtn.getAttribute('data-copy');
+    if (!text) return;
+
+    await navigator.clipboard.writeText(text);
+    const originalText = copyBtn.textContent;
+    copyBtn.textContent = '✓ コピーしました';
+    setTimeout(() => {
+      copyBtn.textContent = originalText;
+    }, 2000);
+  });
 }
 
 async function loadData() {
-  const response = await browser.runtime.sendMessage({ type: 'GET_DATA' });
+  const response = await browser.runtime.sendMessage({ type: 'GET_RESULT_DATA' });
   currentData = {
     routes: response.routes || [],
     requests: response.requests || [],
     types: response.types || [],
+    sampleLimit: response.sampleLimit || 20,
   };
   renderExplorer();
   renderSelectedResult();
@@ -146,7 +177,7 @@ function renderSelectedResult() {
   }
 
   const requests = currentData.requests.filter(r => r.routeId === route.id);
-  const params = aggregateParams(requests);
+  const params = aggregateParams(requests, currentData.sampleLimit);
   const paramList = Object.values(params);
   const typeInfo = currentData.types.find(t => t.routeId === route.id);
   const requestCount = requests.length;
@@ -203,7 +234,6 @@ function renderSelectedResult() {
     ` : '<div class="muted">型定義はまだありません</div>'}
   `;
 
-  attachResultEventListeners();
 }
 
 function buildExplorerTree() {
@@ -377,40 +407,6 @@ type FileNode = {
   method: string;
   depth: number;
 };
-
-function attachResultEventListeners() {
-  // 型バッジのクリックでサンプル値を表示
-  document.querySelectorAll('.type-badge').forEach(badge => {
-    badge.addEventListener('click', (e) => {
-      const target = e.target as HTMLElement;
-      const samplesJson = target.getAttribute('data-samples');
-      if (!samplesJson) return;
-      
-      try {
-        const samples = JSON.parse(samplesJson);
-        showModal('サンプル値', samples);
-      } catch (e) {
-        console.error('Failed to parse samples', e);
-      }
-    });
-  });
-  
-  // コピーボタン
-  document.querySelectorAll('.copy-btn').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      const target = e.target as HTMLElement;
-      const text = target.getAttribute('data-copy');
-      if (!text) return;
-      
-      await navigator.clipboard.writeText(text);
-      const originalText = target.textContent;
-      target.textContent = '✓ コピーしました';
-      setTimeout(() => {
-        target.textContent = originalText;
-      }, 2000);
-    });
-  });
-}
 
 function showModal(title: string, samples: string[]) {
   const modal = document.getElementById('modal')!;

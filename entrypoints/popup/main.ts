@@ -6,6 +6,7 @@ let routes: ApiRoute[] = [];
 // イベントリスナーのセットアップ
 document.addEventListener('DOMContentLoaded', () => {
   setupEventListeners();
+  loadSettings();
   loadRoutes();
 });
 
@@ -42,6 +43,7 @@ function setupEventListeners() {
   // ルート登録
   document.getElementById('addRoute')?.addEventListener('click', addRoute);
   document.getElementById('addAutoRoute')?.addEventListener('click', addAutoRoute);
+  document.getElementById('saveSampleLimitBtn')?.addEventListener('click', saveSampleLimit);
 
   // URL ツール
   document.getElementById('encodeBtn')?.addEventListener('click', () => {
@@ -102,6 +104,40 @@ async function loadRoutes() {
     renderRouteList();
   } catch (e) {
     console.error('Failed to load routes', e);
+  }
+}
+
+async function loadSettings() {
+  try {
+    const response = await browser.runtime.sendMessage({ type: 'GET_SETTINGS' });
+    const sampleLimit = response?.settings?.sampleLimit ?? 20;
+    const input = document.getElementById('sampleLimitInput') as HTMLInputElement | null;
+    if (input) {
+      input.value = String(sampleLimit);
+    }
+  } catch (error) {
+    console.error('Failed to load settings', error);
+  }
+}
+
+async function saveSampleLimit() {
+  const input = document.getElementById('sampleLimitInput') as HTMLInputElement | null;
+  if (!input) return;
+
+  const parsed = Number(input.value);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    alert('サンプル保持上限は1以上の数値を入力してください');
+    return;
+  }
+
+  const response = await browser.runtime.sendMessage({
+    type: 'UPDATE_SETTINGS',
+    sampleLimit: Math.floor(parsed),
+  });
+
+  if (response?.success) {
+    input.value = String(response.settings.sampleLimit);
+    alert('表示設定を保存しました');
   }
 }
 
@@ -207,4 +243,3 @@ function escapeHtml(text: string): string {
   div.textContent = text ?? '';
   return div.innerHTML;
 }
-

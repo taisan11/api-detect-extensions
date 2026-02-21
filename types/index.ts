@@ -33,10 +33,16 @@ export interface GeneratedType {
   typeDefinition: string;
   sampleCount: number; // 何個のサンプルから生成したか
   lastUpdated: number;
+  signature?: string; // 再生成スキップ用ハッシュ
+}
+
+// 設定情報
+export interface AppSettings {
+  sampleLimit: number; // パラメータサンプル保持上限
 }
 
 // ストレージのデータ構造
-export interface StorageData {
+export interface StorageData extends AppSettings {
   routes: ApiRoute[];
   requests: RecordedRequest[];
   types: GeneratedType[];

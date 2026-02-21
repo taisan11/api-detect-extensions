@@ -8,6 +8,7 @@ export default defineConfig({
   targetBrowsers:["firefox"],
   manifest: {
     name: 'API Type Detector',
+    version: "0.0.1",
     description: 'Monitor API routes and generate TypeScript type definitions',
     permissions: [
       'storage',
