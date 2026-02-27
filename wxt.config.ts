@@ -8,7 +8,7 @@ export default defineConfig({
   targetBrowsers: ["firefox"],
   manifest: {
     name: 'API Type Detector',
-    version: "0.0.1",
+    version: "0.0.2",
     description: 'Monitor API routes and generate TypeScript type definitions',
     // MV2 ではホスト権限も permissions 配列に含める
     permissions: [
