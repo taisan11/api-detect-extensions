@@ -5,12 +5,12 @@
     "": {
       "name": "wxt-starter",
       "dependencies": {
-        "prettier": "latest",
+        "prettier": "^3.8.1",
       },
       "devDependencies": {
-        "@wxt-dev/auto-icons": "latest",
-        "typescript": "latest",
-        "wxt": "latest",
+        "@wxt-dev/auto-icons": "^1.1.0",
+        "typescript": "^5.9.3",
+        "wxt": "^0.20.17",
       },
     },
   },

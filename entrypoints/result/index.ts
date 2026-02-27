@@ -62,17 +62,55 @@ function setupEventListeners() {
     }
 
     const copyBtn = target.closest('.copy-btn') as HTMLElement | null;
-    if (!copyBtn) return;
+    if (copyBtn) {
+      const text = copyBtn.getAttribute('data-copy');
+      if (!text) return;
 
-    const text = copyBtn.getAttribute('data-copy');
-    if (!text) return;
+      await navigator.clipboard.writeText(text);
+      const originalText = copyBtn.textContent;
+      copyBtn.textContent = '✓ コピーしました';
+      setTimeout(() => {
+        copyBtn.textContent = originalText;
+      }, 2000);
+      return;
+    }
 
-    await navigator.clipboard.writeText(text);
-    const originalText = copyBtn.textContent;
-    copyBtn.textContent = '✓ コピーしました';
-    setTimeout(() => {
-      copyBtn.textContent = originalText;
-    }, 2000);
+    const promoteBtn = target.closest('[data-action="promote"]') as HTMLElement | null;
+    if (promoteBtn) {
+      const routeId = promoteBtn.dataset.routeId!;
+      const nameInput = document.getElementById('promoteNameInput') as HTMLInputElement | null;
+      const patternInput = document.getElementById('promotePatternInput') as HTMLInputElement | null;
+      const name = nameInput?.value.trim() ?? '';
+      const pattern = patternInput?.value.trim() ?? '';
+
+      if (!name || !pattern) {
+        alert('名前とパターンを入力してください');
+        return;
+      }
+
+      if (!pattern.includes(':')) {
+        try {
+          new RegExp(pattern);
+        } catch {
+          alert('無効なURLパターンです');
+          return;
+        }
+      }
+
+      const response = await browser.runtime.sendMessage({
+        type: 'PROMOTE_TO_PATTERN',
+        routeId,
+        name,
+        pattern,
+      });
+
+      if (response.success) {
+        selectedRouteId = response.route.id;
+        await loadData();
+      } else {
+        alert(`登録に失敗しました: ${response.error}`);
+      }
+    }
   });
 }
 
@@ -193,6 +231,10 @@ function renderSelectedResult() {
     </div>
     <div class="result-path">${escapeHtml(displayPath)}</div>
 
+    ${renderUrlHistory(requests)}
+
+    ${route.parentId ? renderPromoteSection(route) : ''}
+
     ${paramList.length > 0 ? `
       <div class="subsection">
         <div class="subsection-title">クエリパラメータ & リクエストボディ</div>
@@ -211,7 +253,7 @@ function renderSelectedResult() {
                 <td>
                   <div class="param-types">
                     ${Array.from(param.types).map(type => 
-                      `<span class="type-badge" data-samples='${escapeHtml(JSON.stringify(param.samples))}'>${type}</span>`
+                      `<span class="type-badge" data-samples="${escapeHtml(JSON.stringify(param.samples))}">${type}</span>`
                     ).join('')}
                   </div>
                 </td>
@@ -234,6 +276,72 @@ function renderSelectedResult() {
     ` : '<div class="muted">型定義はまだありません</div>'}
   `;
 
+}
+
+function renderUrlHistory(requests: RecordedRequest[]): string {
+  if (requests.length === 0) return '';
+
+  // URL を重複除去して直近10件取得（新しい順）
+  const seen = new Set<string>();
+  const unique = [...requests].reverse().filter(r => {
+    if (seen.has(r.url)) return false;
+    seen.add(r.url);
+    return true;
+  }).slice(0, 10);
+
+  const rows = unique.map(req => {
+    const code = req.statusCode ?? 0;
+    const statusClass = code >= 500 ? 'status-error'
+      : code >= 400 ? 'status-error'
+      : code >= 300 ? 'status-redirect'
+      : code >= 200 ? 'status-ok'
+      : 'status-other';
+    return `
+      <div class="url-history-row">
+        <span class="status-badge ${statusClass}">${req.statusCode ?? '-'}</span>
+        <span class="url-history-text">${escapeHtml(req.url)}</span>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="subsection">
+      <div class="subsection-title">キャプチャされたURL <span class="muted">(直近${unique.length}件 / 計${requests.length}件)</span></div>
+      <div class="url-history">${rows}</div>
+    </div>`;
+}
+
+function getPromotePattern(route: ApiRoute): string {
+  const parent = currentData.routes.find(r => r.id === route.parentId);
+  if (parent?.baseUrl && route.path) {
+    try {
+      const { origin } = new URL(parent.baseUrl);
+      return `${origin}${route.path}`;
+    } catch {
+      // ignore
+    }
+  }
+  return route.path || '/';
+}
+
+function renderPromoteSection(route: ApiRoute): string {
+  const prefilledPattern = getPromotePattern(route);
+  return `
+    <div class="subsection promote-section">
+      <div class="subsection-title">🔧 パターンルートとして定義</div>
+      <div class="promote-hint">
+        キャプチャされたURLを元に <code>:id</code> などのパラメータを定義し、専用の型生成ルートに変換できます。<br>
+        登録後はこのルートに蓄積されたリクエストデータが引き継がれます。
+      </div>
+      <div class="promote-form">
+        <label class="promote-label">ルート名</label>
+        <input type="text" id="promoteNameInput" class="promote-input" value="${escapeHtml(route.name)}" />
+        <label class="promote-label">URLパターン（:id, :userId など可変部分を置換）</label>
+        <input type="text" id="promotePatternInput" class="promote-input" value="${escapeHtml(prefilledPattern)}" />
+        <div class="promote-actions">
+          <button class="btn btn-primary" data-action="promote" data-route-id="${escapeHtml(route.id)}">✅ パターンルートとして登録</button>
+        </div>
+      </div>
+    </div>`;
 }
 
 function buildExplorerTree() {
@@ -387,7 +495,15 @@ function getRouteMethod(route: ApiRoute): string {
 function getRouteDisplayPath(route: ApiRoute): string {
   const parent = route.parentId ? currentData.routes.find(r => r.id === route.parentId) : undefined;
   if (route.path) {
-    return `${parent?.baseUrl ?? ''}${route.path}`;
+    if (parent?.baseUrl) {
+      try {
+        const { origin } = new URL(parent.baseUrl);
+        return `${origin}${route.path}`;
+      } catch {
+        // baseUrl が不正な場合はパスのみ返す
+      }
+    }
+    return route.path;
   }
   return route.baseUrl || route.pattern || '(パス未設定)';
 }
@@ -422,7 +538,10 @@ function showModal(title: string, samples: string[]) {
 }
 
 function escapeHtml(text: string): string {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
 }

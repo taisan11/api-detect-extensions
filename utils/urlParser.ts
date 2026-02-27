@@ -1,4 +1,5 @@
 const compiledPatternCache = new Map<string, RegExp>();
+const PATTERN_CACHE_MAX = 500;
 
 function getCompiledPattern(pattern: string): RegExp {
   const cached = compiledPatternCache.get(pattern);
@@ -8,6 +9,13 @@ function getCompiledPattern(pattern: string): RegExp {
 
   const regexPattern = pattern.includes(':') ? patternToRegex(pattern) : pattern;
   const compiled = new RegExp(regexPattern);
+
+  if (compiledPatternCache.size >= PATTERN_CACHE_MAX) {
+    // 最初に追加されたエントリを削除する (insertion-order eviction)
+    const firstKey = compiledPatternCache.keys().next().value;
+    if (firstKey !== undefined) compiledPatternCache.delete(firstKey);
+  }
+
   compiledPatternCache.set(pattern, compiled);
   return compiled;
 }

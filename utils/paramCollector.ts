@@ -28,7 +28,7 @@ export function inferDataType(value: any): string {
     if (Array.isArray(value)) return 'array';
     if (typeof value === 'object') return 'object';
     if (typeof value === 'number') {
-        return Number.isInteger(value) ? 'number' : 'number';
+        return Number.isInteger(value) ? 'integer' : 'float';
     }
     if (typeof value === 'boolean') return 'boolean';
     if (typeof value === 'string') return 'string';

@@ -20,8 +20,6 @@ const DEFAULT_OPTIONS: Required<TypeGenerationOptions> = {
     maxArraySamples: 100,
 }
 
-let visitedObjects: WeakSet<object> = new WeakSet<object>()
-
 function compareUnionType(a: string, b: string): number {
     const order = (type: string): number => {
         if (type === 'undefined') return 1
@@ -56,9 +54,9 @@ export function generateTypeFromJson(
     options: TypeGenerationOptions = {},
 ): string {
     const opts = { ...DEFAULT_OPTIONS, ...options }
-    visitedObjects = new WeakSet<object>()
+    const visited = new WeakSet<object>()
 
-    const typeDefinition = generateType(json, typeName, 0, opts)
+    const typeDefinition = generateType(json, typeName, 0, opts, visited)
 
     if (typeof json === 'object' && json !== null && !Array.isArray(json)) {
         return typeDefinition
@@ -72,6 +70,7 @@ function generateType(
     typeName: string,
     indent: number,
     options: Required<TypeGenerationOptions>,
+    visited: WeakSet<object>,
 ): string {
     if (value === null || value === undefined) {
         return value === null ? 'null' : 'undefined'
@@ -80,7 +79,7 @@ function generateType(
     const indentStr = ' '.repeat(options.indentSize * indent)
     const nextIndent = ' '.repeat(options.indentSize * (indent + 1))
 
-    if (typeof value === 'object' && visitedObjects.has(value)) {
+    if (typeof value === 'object' && visited.has(value)) {
         return 'unknown /* 循環参照を検出 */'
     }
 
@@ -93,17 +92,16 @@ function generateType(
             ? value
             : value.slice(0, options.maxArraySamples)
 
-        const itemTypes = samplesToAnalyze.map((item) => inferType(item, options))
-        const union = buildUnion(itemTypes)
-        return normalizedArrayUnion(union)
+        const itemTypes = samplesToAnalyze.map((item) => inferType(item, options, visited))
+        return normalizedArrayUnion(itemTypes)
     }
 
     if (typeof value === 'object') {
-        visitedObjects.add(value)
+        visited.add(value)
 
         const entries = Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
         const properties = entries.map(([key, val]) => {
-            const propType = inferType(val, options)
+            const propType = inferType(val, options, visited)
             const readonly = options.readonly ? 'readonly ' : ''
             const comment = options.generateComments
                 ? `\n${nextIndent}/** ${getPropertyComment(key, val)} */`
@@ -124,7 +122,7 @@ function generateType(
     return typeof value
 }
 
-function inferType(value: any, options: Required<TypeGenerationOptions>): string {
+function inferType(value: any, options: Required<TypeGenerationOptions>, visited: WeakSet<object>): string {
     if (value === null) return 'null'
     if (value === undefined) return 'undefined'
 
@@ -139,18 +137,17 @@ function inferType(value: any, options: Required<TypeGenerationOptions>): string
             ? value
             : value.slice(0, options.maxArraySamples)
 
-        const itemTypes = samplesToAnalyze.map((item) => inferType(item, options))
-        const union = buildUnion(itemTypes)
-        return normalizedArrayUnion(union)
+        const itemTypes = samplesToAnalyze.map((item) => inferType(item, options, visited))
+        return normalizedArrayUnion(itemTypes)
     }
 
     if (typeof value === 'object') {
-        if (visitedObjects.has(value)) {
+        if (visited.has(value)) {
             return 'unknown /* 循環参照 */'
         }
 
         const entries = Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
-        const properties = entries.map(([key, val]) => `${toSafeKey(key)}: ${inferType(val, options)}`)
+        const properties = entries.map(([key, val]) => `${toSafeKey(key)}: ${inferType(val, options, visited)}`)
 
         if (properties.length === 0) {
             return 'Record<string, unknown>'
@@ -162,9 +159,8 @@ function inferType(value: any, options: Required<TypeGenerationOptions>): string
     return typeof value
 }
 
-function normalizedArrayUnion(union: string): string {
-    const types = union.split('|').map((item) => item.trim())
-    const normalized = buildUnion(types)
+function normalizedArrayUnion(itemTypes: string[]): string {
+    const normalized = buildUnion(itemTypes)
     if (!normalized.includes('|')) {
         return `${normalized}[]`
     }
@@ -219,6 +215,8 @@ export function generateTypeFromSamples(
     const totalSamples = samples.length
     const indentStr = ' '.repeat(opts.indentSize)
     const sortedPropertyKeys = Array.from(propertyMap.keys()).sort((a, b) => a.localeCompare(b))
+    // サンプル全体で1つの visited を共有してサイクルを検出する
+    const visited = new WeakSet<object>()
 
     sortedPropertyKeys.forEach((key) => {
         const values = propertyMap.get(key) ?? []
@@ -235,7 +233,7 @@ export function generateTypeFromSamples(
                 hasUndefined = true
                 return
             }
-            inferredTypes.push(inferType(value, opts))
+            inferredTypes.push(inferType(value, opts, visited))
         })
 
         const unionTypes = [...normalizeUnionTypes(inferredTypes)]

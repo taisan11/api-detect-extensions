@@ -234,6 +234,7 @@ function setupWebRequestListeners() {
 
             const text = new TextDecoder('utf-8').decode(combined)
             if (!text.trim()) {
+              filter.close()
               return
             }
 
@@ -241,7 +242,7 @@ function setupWebRequestListeners() {
           } catch {
             // JSONでないレスポンスはスキップ
           } finally {
-            filter.disconnect()
+            filter.close()
           }
         }
       } catch (error) {
@@ -281,55 +282,62 @@ function setupWebRequestListeners() {
   )
 
   browser.webRequest.onCompleted.addListener(
-    async (details) => {
+    (details) => {
       const requestId = `${details.requestId}`
 
-      try {
-        if (details.tabId === -1 || !TRACKED_METHODS.has(details.method)) {
-          return
-        }
+      Promise.resolve()
+        .then(async () => {
+          try {
+            if (details.tabId === -1 || !TRACKED_METHODS.has(details.method)) {
+              return
+            }
 
-        const cleanUrl = getBaseUrl(details.url)
-        const routes = state.routes
+            const cleanUrl = getBaseUrl(details.url)
+            const routes = state.routes
 
-        let matchedRoute = routes.find((route) => {
-          if (!route.enabled || route.parentId || route.isAutoDetect) return false
-          if (!route.pattern) return false
-          return matchesPattern(cleanUrl, route.pattern)
-        })
+            let matchedRoute = routes.find((route) => {
+              if (!route.enabled || route.parentId || route.isAutoDetect) return false
+              if (!route.pattern) return false
+              return matchesPattern(cleanUrl, route.pattern)
+            })
 
-        const autoDetectRoute = routes.find(
-          (route) =>
-            route.enabled &&
-            route.isAutoDetect &&
-            route.baseUrl &&
-            matchesBaseUrl(cleanUrl, route.baseUrl),
-        )
+            const autoDetectRoute = routes.find(
+              (route) =>
+                route.enabled &&
+                route.isAutoDetect &&
+                route.baseUrl &&
+                matchesBaseUrl(cleanUrl, route.baseUrl),
+            )
 
-        if (autoDetectRoute) {
-          const path = extractPath(cleanUrl)
-          const normalizedPath = normalizePath(path)
+            if (autoDetectRoute) {
+              const path = extractPath(cleanUrl)
+              const normalizedPath = normalizePath(path)
 
-          let childRoute = routes.find(
-            (route) =>
-              route.parentId === autoDetectRoute.id &&
-              route.method === details.method &&
-              route.path === normalizedPath,
-          )
+              let childRoute = routes.find(
+                (route) =>
+                  route.parentId === autoDetectRoute.id &&
+                  route.method === details.method &&
+                  route.path === normalizedPath,
+              )
 
-          if (!childRoute) {
-            childRoute = await createChildRoute(autoDetectRoute, normalizedPath, details.method)
+              if (!childRoute) {
+                childRoute = await createChildRoute(autoDetectRoute, normalizedPath, details.method)
+              }
+
+              matchedRoute = childRoute
+            }
+
+            if (matchedRoute) {
+              await captureResponse(details, matchedRoute, requestId)
+            }
+          } finally {
+            cleanupRequestCache(requestId)
           }
-
-          matchedRoute = childRoute
-        }
-
-        if (matchedRoute) {
-          await captureResponse(details, matchedRoute, requestId)
-        }
-      } finally {
-        cleanupRequestCache(requestId)
-      }
+        })
+        .catch((error) => {
+          console.error('onCompleted handler error:', error)
+          cleanupRequestCache(requestId)
+        })
     },
     { urls: ['<all_urls>'] },
   )
@@ -466,7 +474,7 @@ function buildGroupedSamples(routeRequests: RecordedRequest[]): BucketGroup[] {
 async function updateTypeDefinition(route: ApiRoute, allRequests: RecordedRequest[]): Promise<boolean> {
   const routeRequests = allRequests
     .filter((req) => req.routeId === route.id && req.response)
-    .slice(-10)
+    .slice(-state.sampleLimit)
 
   if (routeRequests.length === 0) {
     return false
@@ -617,6 +625,48 @@ function setupMessageListeners() {
       state.sampleLimit = sampleLimit
       scheduleStorageFlush(['sampleLimit'], true)
       sendResponse({ success: true, settings: { sampleLimit } })
+      return true
+    }
+
+    if (message.type === 'PROMOTE_TO_PATTERN') {
+      const sourceRoute = state.routes.find((r) => r.id === message.routeId)
+      if (!sourceRoute || !sourceRoute.parentId) {
+        sendResponse({ success: false, error: 'Route not found or not a child route' })
+        return true
+      }
+
+      const newRoute: ApiRoute = {
+        id: `${Date.now()}-${Math.random()}`,
+        pattern: message.pattern,
+        name: message.name || sourceRoute.name,
+        enabled: true,
+        createdAt: Date.now(),
+        method: sourceRoute.method,
+      }
+
+      // リクエストを新ルートに付け替え
+      state.requests.forEach((req) => {
+        if (req.routeId === sourceRoute.id) {
+          req.routeId = newRoute.id
+        }
+      })
+
+      // 型定義を新ルートに付け替え（署名をリセットして次回再生成させる）
+      state.types.forEach((t) => {
+        if (t.routeId === sourceRoute.id) {
+          t.routeId = newRoute.id
+          t.routeName = newRoute.name
+          t.typeName = generateTypeName(newRoute.name)
+          t.signature = undefined
+        }
+      })
+
+      // 旧子ルートを削除して新ルートを追加
+      state.routes = state.routes.filter((r) => r.id !== sourceRoute.id)
+      state.routes.push(newRoute)
+
+      scheduleStorageFlush(['routes', 'requests', 'types'])
+      sendResponse({ success: true, route: newRoute })
       return true
     }
 
