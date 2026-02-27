@@ -48,6 +48,71 @@ function toSafeKey(key: string): string {
     return /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(key) ? key : `"${key}"`
 }
 
+/**
+ * 複数のオブジェクトサンプルを1つの統合型に変換する。
+ * 全サンプルに存在しないキーはオプショナルになる。
+ * ネストされたオブジェクトも再帰的に統合する。
+ */
+function mergeObjectValues(
+    objects: Record<string, unknown>[],
+    options: Required<TypeGenerationOptions>,
+    visited: WeakSet<object>,
+    indent: number,
+): string {
+    const propertyMap = new Map<string, unknown[]>()
+    const total = objects.length
+
+    for (const obj of objects) {
+        for (const [key, value] of Object.entries(obj).sort(([a], [b]) => a.localeCompare(b))) {
+            if (!propertyMap.has(key)) propertyMap.set(key, [])
+            propertyMap.get(key)!.push(value)
+        }
+    }
+
+    if (propertyMap.size === 0) return 'Record<string, unknown>'
+
+    const indentStr = ' '.repeat(options.indentSize * indent)
+    const nextIndent = ' '.repeat(options.indentSize * (indent + 1))
+    const sortedKeys = Array.from(propertyMap.keys()).sort((a, b) => a.localeCompare(b))
+    const properties: string[] = []
+
+    for (const key of sortedKeys) {
+        const values = propertyMap.get(key)!
+        const hasNull = values.some(v => v === null)
+        const hasUndefined = values.length < total || values.some(v => v === undefined)
+        const nonNullValues = values.filter(v => v !== null && v !== undefined)
+
+        const objVals = nonNullValues.filter(
+            v => typeof v === 'object' && !Array.isArray(v)
+        ) as Record<string, unknown>[]
+        const otherVals = nonNullValues.filter(
+            v => !(typeof v === 'object' && !Array.isArray(v))
+        )
+
+        let typeStr: string
+        if (objVals.length > 0 && otherVals.length === 0) {
+            typeStr = mergeObjectValues(objVals, options, visited, indent + 1)
+        } else {
+            const types = nonNullValues.map(v => inferType(v, options, visited))
+            typeStr = buildUnion(normalizeUnionTypes(types), 'unknown')
+        }
+
+        const parts: string[] = [typeStr]
+        if (hasNull) parts.push('null')
+        const finalType = parts.length === 1 ? parts[0] : parts.join(' | ')
+
+        const optional = hasUndefined ? '?' : ''
+        const readonly = options.readonly ? 'readonly ' : ''
+        properties.push(`\n${nextIndent}${readonly}${toSafeKey(key)}${optional}: ${finalType};`)
+    }
+
+    return `{${properties.join('')}\n${indentStr}}`
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+    return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
 export function generateTypeFromJson(
     json: any,
     typeName: string,
@@ -91,6 +156,14 @@ function generateType(
         const samplesToAnalyze = options.analyzeAllArrayElements
             ? value
             : value.slice(0, options.maxArraySamples)
+
+        const objItems = samplesToAnalyze.filter(isPlainObject) as Record<string, unknown>[]
+        const otherItems = samplesToAnalyze.filter(item => !isPlainObject(item))
+
+        if (objItems.length > 0 && otherItems.length === 0) {
+            const merged = mergeObjectValues(objItems, options, visited, indent + 1)
+            return normalizedArrayUnion([merged])
+        }
 
         const itemTypes = samplesToAnalyze.map((item) => inferType(item, options, visited))
         return normalizedArrayUnion(itemTypes)
@@ -136,6 +209,14 @@ function inferType(value: any, options: Required<TypeGenerationOptions>, visited
         const samplesToAnalyze = options.analyzeAllArrayElements
             ? value
             : value.slice(0, options.maxArraySamples)
+
+        const objItems = samplesToAnalyze.filter(isPlainObject) as Record<string, unknown>[]
+        const otherItems = samplesToAnalyze.filter(item => !isPlainObject(item))
+
+        if (objItems.length > 0 && otherItems.length === 0) {
+            const merged = mergeObjectValues(objItems, options, visited, 0)
+            return normalizedArrayUnion([merged])
+        }
 
         const itemTypes = samplesToAnalyze.map((item) => inferType(item, options, visited))
         return normalizedArrayUnion(itemTypes)
@@ -220,33 +301,40 @@ export function generateTypeFromSamples(
 
     sortedPropertyKeys.forEach((key) => {
         const values = propertyMap.get(key) ?? []
-        const inferredTypes: string[] = []
         let hasNull = false
         let hasUndefined = values.length < totalSamples
 
+        const nonNullValues: unknown[] = []
         values.forEach((value) => {
-            if (value === null) {
-                hasNull = true
-                return
-            }
-            if (value === undefined) {
-                hasUndefined = true
-                return
-            }
-            inferredTypes.push(inferType(value, opts, visited))
+            if (value === null) { hasNull = true; return }
+            if (value === undefined) { hasUndefined = true; return }
+            nonNullValues.push(value)
         })
 
-        const unionTypes = [...normalizeUnionTypes(inferredTypes)]
-        if (hasUndefined) unionTypes.push('undefined')
-        if (hasNull) unionTypes.push('null')
+        // 全て plain object なら統合、それ以外は従来通り Union
+        const objVals = nonNullValues.filter(isPlainObject) as Record<string, unknown>[]
+        const otherVals = nonNullValues.filter(v => !isPlainObject(v))
 
-        const typeStr = buildUnion(unionTypes, 'unknown')
+        let baseType: string
+        if (objVals.length > 0 && otherVals.length === 0) {
+            baseType = mergeObjectValues(objVals, opts, visited, 1)
+        } else {
+            const inferredTypes = nonNullValues.map(v => inferType(v, opts, visited))
+            baseType = buildUnion(normalizeUnionTypes(inferredTypes), 'unknown')
+        }
+
+        const unionParts: string[] = [baseType]
+        if (hasNull) unionParts.push('null')
+        if (hasUndefined) unionParts.push('undefined')
+        const typeStr = unionParts.length === 1 ? unionParts[0] : unionParts.join(' | ')
+
+        const optional = hasUndefined ? '?' : ''
         const readonly = opts.readonly ? 'readonly ' : ''
         const comment = opts.generateComments
             ? `\n${indentStr}/** 出現回数: ${values.length}/${totalSamples} */`
             : ''
 
-        properties.push(`${comment}\n${indentStr}${readonly}${toSafeKey(key)}: ${typeStr};`)
+        properties.push(`${comment}\n${indentStr}${readonly}${toSafeKey(key)}${optional}: ${typeStr};`)
     })
 
     const interfaceBody = properties.join('')
