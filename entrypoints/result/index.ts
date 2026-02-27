@@ -75,11 +75,13 @@ function setupEventListeners() {
       return;
     }
 
-    const promoteBtn = target.closest('[data-action="promote"]') as HTMLElement | null;
+    const promoteBtn = target.closest('[data-action="promote-auto"]') as HTMLElement | null;
     if (promoteBtn) {
-      const routeId = promoteBtn.dataset.routeId!;
+      const parentRouteId = promoteBtn.dataset.routeId!;
+      const methodSelect = document.getElementById('promoteMethodSelect') as HTMLSelectElement | null;
       const nameInput = document.getElementById('promoteNameInput') as HTMLInputElement | null;
       const patternInput = document.getElementById('promotePatternInput') as HTMLInputElement | null;
+      const method = methodSelect?.value.trim() || undefined;
       const name = nameInput?.value.trim() ?? '';
       const pattern = patternInput?.value.trim() ?? '';
 
@@ -88,18 +90,10 @@ function setupEventListeners() {
         return;
       }
 
-      if (!pattern.includes(':')) {
-        try {
-          new RegExp(pattern);
-        } catch {
-          alert('無効なURLパターンです');
-          return;
-        }
-      }
-
       const response = await browser.runtime.sendMessage({
         type: 'PROMOTE_TO_PATTERN',
-        routeId,
+        parentRouteId,
+        method,
         name,
         pattern,
       });
@@ -214,6 +208,12 @@ function renderSelectedResult() {
     return;
   }
 
+  // AUTOルートは専用UIを表示
+  if (route.isAutoDetect) {
+    results.innerHTML = renderAutoParentResult(route);
+    return;
+  }
+
   const requests = currentData.requests.filter(r => r.routeId === route.id);
   const params = aggregateParams(requests, currentData.sampleLimit);
   const paramList = Object.values(params);
@@ -232,8 +232,6 @@ function renderSelectedResult() {
     <div class="result-path">${escapeHtml(displayPath)}</div>
 
     ${renderUrlHistory(requests)}
-
-    ${route.parentId ? renderPromoteSection(route) : ''}
 
     ${paramList.length > 0 ? `
       <div class="subsection">
@@ -278,6 +276,84 @@ function renderSelectedResult() {
 
 }
 
+function renderAutoParentResult(route: ApiRoute): string {
+  const childRoutes = currentData.routes.filter(r => r.parentId === route.id);
+  const totalRequests = childRoutes.reduce(
+    (sum, child) => sum + currentData.requests.filter(r => r.routeId === child.id).length,
+    0
+  );
+  const baseUrl = route.baseUrl || '';
+
+  return `
+    <div class="result-header">
+      <span class="method-badge method-auto">AUTO</span>
+      <div class="result-title">${escapeHtml(route.name)}</div>
+      <div class="muted">${childRoutes.length}ルート収集 / ${totalRequests}リクエスト</div>
+    </div>
+    <div class="result-path">${escapeHtml(baseUrl)}</div>
+
+    <div class="subsection promote-section">
+      <div class="subsection-title">🔧 パターンルート登録</div>
+      <div class="promote-hint">
+        収集されたURLを確認し、<code>:id</code> などで可変部分を置換したパターンを定義してください。<br>
+        登録するとパターンにマッチした収集ルートのリクエストデータが引き継がれ、型定義が生成されます。
+      </div>
+      <div class="promote-form">
+        <label class="promote-label">HTTPメソッド</label>
+        <select id="promoteMethodSelect" class="promote-input">
+          <option value="">すべてのメソッド</option>
+          <option value="GET">GET</option>
+          <option value="POST">POST</option>
+          <option value="PUT">PUT</option>
+          <option value="PATCH">PATCH</option>
+          <option value="DELETE">DELETE</option>
+        </select>
+        <label class="promote-label">ルート名</label>
+        <input type="text" id="promoteNameInput" class="promote-input" placeholder="例: GET Users By Id" />
+        <label class="promote-label">URLパターン（:param で可変部分を指定）</label>
+        <input type="text" id="promotePatternInput" class="promote-input"
+          value="${escapeHtml(baseUrl)}"
+          placeholder="例: https://example.com/api/users/:id" />
+        <div class="promote-actions">
+          <button class="btn btn-primary" data-action="promote-auto" data-route-id="${escapeHtml(route.id)}">✅ パターンルートとして登録</button>
+        </div>
+      </div>
+    </div>
+
+    ${renderCollectedRoutesList(childRoutes)}
+  `;
+}
+
+function renderCollectedRoutesList(childRoutes: ApiRoute[]): string {
+  if (childRoutes.length === 0) {
+    return '<div class="muted" style="margin-top:16px;">まだルートが収集されていません。対象ページを操作してAPIリクエストを発生させてください。</div>';
+  }
+
+  // メソッド → パスでソート
+  const sorted = [...childRoutes].sort((a, b) => {
+    const m = (a.method ?? '').localeCompare(b.method ?? '');
+    return m !== 0 ? m : (a.path ?? '').localeCompare(b.path ?? '');
+  });
+
+  const rows = sorted.map(child => {
+    const method = (child.method || 'ANY').toUpperCase();
+    const badgeClass = `method-${method.toLowerCase()}`;
+    const reqCount = currentData.requests.filter(r => r.routeId === child.id).length;
+    return `
+      <div class="collected-route-row">
+        <span class="method-badge ${badgeClass}" style="font-size:10px;padding:2px 6px;">${method}</span>
+        <span class="collected-route-path">${escapeHtml(child.path || '/')}</span>
+        <span class="collected-route-count">${reqCount}件</span>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="subsection">
+      <div class="subsection-title">📡 収集されたルート <span class="muted">(${childRoutes.length}件)</span></div>
+      <div class="collected-routes-list">${rows}</div>
+    </div>`;
+}
+
 function renderUrlHistory(requests: RecordedRequest[]): string {
   if (requests.length === 0) return '';
 
@@ -310,40 +386,6 @@ function renderUrlHistory(requests: RecordedRequest[]): string {
     </div>`;
 }
 
-function getPromotePattern(route: ApiRoute): string {
-  const parent = currentData.routes.find(r => r.id === route.parentId);
-  if (parent?.baseUrl && route.path) {
-    try {
-      const { origin } = new URL(parent.baseUrl);
-      return `${origin}${route.path}`;
-    } catch {
-      // ignore
-    }
-  }
-  return route.path || '/';
-}
-
-function renderPromoteSection(route: ApiRoute): string {
-  const prefilledPattern = getPromotePattern(route);
-  return `
-    <div class="subsection promote-section">
-      <div class="subsection-title">🔧 パターンルートとして定義</div>
-      <div class="promote-hint">
-        キャプチャされたURLを元に <code>:id</code> などのパラメータを定義し、専用の型生成ルートに変換できます。<br>
-        登録後はこのルートに蓄積されたリクエストデータが引き継がれます。
-      </div>
-      <div class="promote-form">
-        <label class="promote-label">ルート名</label>
-        <input type="text" id="promoteNameInput" class="promote-input" value="${escapeHtml(route.name)}" />
-        <label class="promote-label">URLパターン（:id, :userId など可変部分を置換）</label>
-        <input type="text" id="promotePatternInput" class="promote-input" value="${escapeHtml(prefilledPattern)}" />
-        <div class="promote-actions">
-          <button class="btn btn-primary" data-action="promote" data-route-id="${escapeHtml(route.id)}">✅ パターンルートとして登録</button>
-        </div>
-      </div>
-    </div>`;
-}
-
 function buildExplorerTree() {
   const root = {
     folders: [] as FolderNode[],
@@ -351,7 +393,8 @@ function buildExplorerTree() {
 
   const hostMap = new Map<string, FolderNode>();
 
-  currentData.routes.forEach(route => {
+  // parentId を持つ子ルート（AUTOで収集された未昇格ルート）はExplorerに表示しない
+  currentData.routes.filter(route => !route.parentId).forEach(route => {
     const { host, folders, fileLabel, method } = getRouteExplorerInfo(route);
     const hostFolder = getOrCreateFolder(hostMap, host, 0);
     let currentFolder = hostFolder;

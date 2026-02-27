@@ -7,7 +7,6 @@ import {
   getBaseUrl,
   matchesBaseUrl,
   matchesPattern,
-  normalizePath,
 } from '@/utils/urlParser'
 import { generateTypeFromSamples, generateTypeName } from '@/utils/typeGenerator'
 
@@ -311,17 +310,16 @@ function setupWebRequestListeners() {
 
             if (autoDetectRoute) {
               const path = extractPath(cleanUrl)
-              const normalizedPath = normalizePath(path)
 
               let childRoute = routes.find(
                 (route) =>
                   route.parentId === autoDetectRoute.id &&
                   route.method === details.method &&
-                  route.path === normalizedPath,
+                  route.path === path,
               )
 
               if (!childRoute) {
-                childRoute = await createChildRoute(autoDetectRoute, normalizedPath, details.method)
+                childRoute = await createChildRoute(autoDetectRoute, path, details.method)
               }
 
               matchedRoute = childRoute
@@ -629,44 +627,60 @@ function setupMessageListeners() {
     }
 
     if (message.type === 'PROMOTE_TO_PATTERN') {
-      const sourceRoute = state.routes.find((r) => r.id === message.routeId)
-      if (!sourceRoute || !sourceRoute.parentId) {
-        sendResponse({ success: false, error: 'Route not found or not a child route' })
+      const parentRoute = state.routes.find((r) => r.id === message.parentRouteId)
+      if (!parentRoute || !parentRoute.isAutoDetect || !parentRoute.baseUrl) {
+        sendResponse({ success: false, error: 'AUTO parent route not found' })
+        return true
+      }
+
+      let parentOrigin: string
+      try {
+        parentOrigin = new URL(parentRoute.baseUrl).origin
+      } catch {
+        sendResponse({ success: false, error: 'Invalid baseUrl on AUTO route' })
+        return true
+      }
+
+      // 子ルートの中でパターンにマッチするものを全て収集
+      const childRoutes = state.routes.filter((r) => r.parentId === parentRoute.id)
+      const matchingChildren = childRoutes.filter((child) => {
+        if (!child.path) return false
+        if (message.method && child.method !== message.method) return false
+        return matchesPattern(`${parentOrigin}${child.path}`, message.pattern)
+      })
+
+      if (matchingChildren.length === 0) {
+        sendResponse({ success: false, error: 'No matching collected routes found for this pattern' })
         return true
       }
 
       const newRoute: ApiRoute = {
         id: `${Date.now()}-${Math.random()}`,
         pattern: message.pattern,
-        name: message.name || sourceRoute.name,
+        name: message.name,
         enabled: true,
         createdAt: Date.now(),
-        method: sourceRoute.method,
+        method: message.method || undefined,
       }
 
-      // リクエストを新ルートに付け替え
+      const matchingIds = new Set(matchingChildren.map((r) => r.id))
+
+      // マッチした子ルートのリクエストを新ルートに付け替え
       state.requests.forEach((req) => {
-        if (req.routeId === sourceRoute.id) {
+        if (matchingIds.has(req.routeId)) {
           req.routeId = newRoute.id
         }
       })
 
-      // 型定義を新ルートに付け替え（署名をリセットして次回再生成させる）
-      state.types.forEach((t) => {
-        if (t.routeId === sourceRoute.id) {
-          t.routeId = newRoute.id
-          t.routeName = newRoute.name
-          t.typeName = generateTypeName(newRoute.name)
-          t.signature = undefined
-        }
-      })
+      // マッチした子ルートの型定義を削除（新ルート名で再生成させる）
+      state.types = state.types.filter((t) => !matchingIds.has(t.routeId))
 
-      // 旧子ルートを削除して新ルートを追加
-      state.routes = state.routes.filter((r) => r.id !== sourceRoute.id)
+      // マッチした子ルートを削除して新ルートを追加
+      state.routes = state.routes.filter((r) => !matchingIds.has(r.id))
       state.routes.push(newRoute)
 
       scheduleStorageFlush(['routes', 'requests', 'types'])
-      sendResponse({ success: true, route: newRoute })
+      sendResponse({ success: true, route: newRoute, promotedCount: matchingChildren.length })
       return true
     }
 

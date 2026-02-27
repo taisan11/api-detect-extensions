@@ -507,6 +507,42 @@
         gap: 8px;
         margin-top: 4px;
       }
+      select.promote-input {
+        appearance: auto;
+        cursor: pointer;
+      }
+
+      .collected-routes-list {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        max-height: 400px;
+        overflow-y: auto;
+      }
+
+      .collected-route-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 10px;
+        background: #252526;
+        border: 1px solid #333;
+        border-radius: 4px;
+        font-size: 12px;
+      }
+
+      .collected-route-path {
+        font-family: 'Cascadia Code', 'Fira Code', monospace;
+        color: #9cdcfe;
+        flex: 1;
+        word-break: break-all;
+      }
+
+      .collected-route-count {
+        flex-shrink: 0;
+        color: #6c757d;
+        font-size: 11px;
+      }
     </style>
   </head>
   <body>
