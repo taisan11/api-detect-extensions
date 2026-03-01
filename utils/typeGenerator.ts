@@ -171,25 +171,28 @@ function generateType(
 
     if (typeof value === 'object') {
         visited.add(value)
+        try {
+            const entries = Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
+            const properties = entries.map(([key, val]) => {
+                const propType = inferType(val, options, visited)
+                const readonly = options.readonly ? 'readonly ' : ''
+                const comment = options.generateComments
+                    ? `\n${nextIndent}/** ${getPropertyComment(key, val)} */`
+                    : ''
 
-        const entries = Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
-        const properties = entries.map(([key, val]) => {
-            const propType = inferType(val, options, visited)
-            const readonly = options.readonly ? 'readonly ' : ''
-            const comment = options.generateComments
-                ? `\n${nextIndent}/** ${getPropertyComment(key, val)} */`
-                : ''
+                return `${comment}\n${nextIndent}${readonly}${toSafeKey(key)}: ${propType};`
+            })
 
-            return `${comment}\n${nextIndent}${readonly}${toSafeKey(key)}: ${propType};`
-        })
+            if (indent === 0) {
+                const interfaceBody = properties.join('')
+                const comment = options.generateComments ? `/**\n * ${typeName} の型定義\n */\n` : ''
+                return `${comment}interface ${typeName} {${interfaceBody}\n}`
+            }
 
-        if (indent === 0) {
-            const interfaceBody = properties.join('')
-            const comment = options.generateComments ? `/**\n * ${typeName} の型定義\n */\n` : ''
-            return `${comment}interface ${typeName} {${interfaceBody}\n}`
+            return `{${properties.join('')}\n${indentStr}}`
+        } finally {
+            visited.delete(value)
         }
-
-        return `{${properties.join('')}\n${indentStr}}`
     }
 
     return typeof value
@@ -227,14 +230,19 @@ function inferType(value: any, options: Required<TypeGenerationOptions>, visited
             return 'unknown /* 循環参照 */'
         }
 
-        const entries = Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
-        const properties = entries.map(([key, val]) => `${toSafeKey(key)}: ${inferType(val, options, visited)}`)
+        visited.add(value)
+        try {
+            const entries = Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
+            const properties = entries.map(([key, val]) => `${toSafeKey(key)}: ${inferType(val, options, visited)}`)
 
-        if (properties.length === 0) {
-            return 'Record<string, unknown>'
+            if (properties.length === 0) {
+                return 'Record<string, unknown>'
+            }
+
+            return `{ ${properties.join('; ')} }`
+        } finally {
+            visited.delete(value)
         }
-
-        return `{ ${properties.join('; ')} }`
     }
 
     return typeof value
@@ -272,18 +280,32 @@ export function generateTypeFromSamples(
     options: TypeGenerationOptions = {},
 ): string {
     const opts = { ...DEFAULT_OPTIONS, ...options }
+    const visited = new WeakSet<object>()
 
     if (samples.length === 0) {
         return `interface ${typeName} {\n  [key: string]: unknown;\n}`
     }
 
+    const objectSamples = samples.filter(isPlainObject) as Record<string, unknown>[]
+    const nonObjectSamples = samples.filter((sample) => !isPlainObject(sample))
+
+    if (objectSamples.length === 0) {
+        const inferredTypes = samples.map((sample) => inferType(sample, opts, visited))
+        const topLevelType = buildUnion(normalizeUnionTypes(inferredTypes), 'unknown')
+        return `type ${typeName} = ${topLevelType};`
+    }
+
+    if (nonObjectSamples.length > 0) {
+        const objectType = mergeObjectValues(objectSamples, opts, visited, 0)
+        const inferredTypes = nonObjectSamples.map((sample) => inferType(sample, opts, visited))
+        const nonObjectType = buildUnion(normalizeUnionTypes(inferredTypes), 'unknown')
+        const topLevelType = buildUnion([objectType, nonObjectType], 'unknown')
+        return `type ${typeName} = ${topLevelType};`
+    }
+
     const propertyMap = new Map<string, any[]>()
 
-    samples.forEach((sample) => {
-        if (typeof sample !== 'object' || sample === null || Array.isArray(sample)) {
-            return
-        }
-
+    objectSamples.forEach((sample) => {
         Object.entries(sample).forEach(([key, value]) => {
             if (!propertyMap.has(key)) {
                 propertyMap.set(key, [])
@@ -293,11 +315,9 @@ export function generateTypeFromSamples(
     })
 
     const properties: string[] = []
-    const totalSamples = samples.length
+    const totalSamples = objectSamples.length
     const indentStr = ' '.repeat(opts.indentSize)
     const sortedPropertyKeys = Array.from(propertyMap.keys()).sort((a, b) => a.localeCompare(b))
-    // サンプル全体で1つの visited を共有してサイクルを検出する
-    const visited = new WeakSet<object>()
 
     sortedPropertyKeys.forEach((key) => {
         const values = propertyMap.get(key) ?? []
@@ -325,7 +345,6 @@ export function generateTypeFromSamples(
 
         const unionParts: string[] = [baseType]
         if (hasNull) unionParts.push('null')
-        if (hasUndefined) unionParts.push('undefined')
         const typeStr = unionParts.length === 1 ? unionParts[0] : unionParts.join(' | ')
 
         const optional = hasUndefined ? '?' : ''

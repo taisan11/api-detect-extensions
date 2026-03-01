@@ -474,12 +474,22 @@ async function updateTypeDefinition(route: ApiRoute, allRequests: RecordedReques
     .filter((req) => req.routeId === route.id && req.response)
     .slice(-state.sampleLimit)
 
+  const existingIndex = state.types.findIndex((item) => item.routeId === route.id)
+
   if (routeRequests.length === 0) {
+    if (existingIndex >= 0) {
+      state.types.splice(existingIndex, 1)
+      return true
+    }
     return false
   }
 
   const groups = buildGroupedSamples(routeRequests)
   if (groups.length === 0) {
+    if (existingIndex >= 0) {
+      state.types.splice(existingIndex, 1)
+      return true
+    }
     return false
   }
 
@@ -512,7 +522,6 @@ async function updateTypeDefinition(route: ApiRoute, allRequests: RecordedReques
     signature,
   }
 
-  const existingIndex = state.types.findIndex((item) => item.routeId === route.id)
   if (existingIndex >= 0) {
     state.types[existingIndex] = generatedType
   } else {
