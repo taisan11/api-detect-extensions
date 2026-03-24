@@ -226,6 +226,7 @@ button:active {
 
 .method-any { background: #495057; color: #fff; }
 .method-auto { background: #845ef7; color: #fff; }
+.method-gql { background: #e64980; color: #fff; }
 .method-get { background: #51cf66; color: #1a1a1a; }
 .method-post { background: #4dabf7; color: #fff; }
 .method-put { background: #ff922b; color: #fff; }

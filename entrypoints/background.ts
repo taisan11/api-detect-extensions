@@ -1,6 +1,7 @@
 import type { ApiRoute, AppSettings, GeneratedType, RecordedRequest, StorageData } from '@/types'
 import { extractQueryParams } from '@/utils/paramCollector'
 import { formatCode } from '@/utils/format'
+import { generateGraphqlSchemaFromRequests } from '@/utils/graphqlSchemaGenerator'
 import {
   extractPath,
   generateRouteName,
@@ -44,6 +45,7 @@ let storageWriteChain: Promise<void> = Promise.resolve()
 const requestBodies = new Map<string, any>()
 const responseBodies = new Map<string, any>()
 const responseMeta = new Map<string, { contentType?: string }>()
+let typesDirty = true
 
 interface FilterResponseDataEvent {
   data: ArrayBuffer
@@ -75,6 +77,94 @@ function normalizeSampleLimit(value: unknown): number {
     return DEFAULT_SAMPLE_LIMIT
   }
   return Math.max(1, Math.floor(value))
+}
+
+function normalizeGraphqlEndpoint(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  if (!trimmed) return undefined
+  try {
+    const parsed = new URL(trimmed)
+    return `${parsed.origin}${parsed.pathname}`
+  } catch {
+    return undefined
+  }
+}
+
+function parseGraphqlOperation(query: string): {
+  operationType?: 'query' | 'mutation' | 'subscription'
+  operationName?: string
+} {
+  const compact = query.replace(/#[^\n\r]*/g, ' ').replace(/\s+/g, ' ').trim()
+  if (!compact) return {}
+
+  const match = compact.match(/\b(query|mutation|subscription)\b\s*([A-Za-z_][A-Za-z0-9_]*)?/)
+  if (match) {
+    return {
+      operationType: match[1] as 'query' | 'mutation' | 'subscription',
+      operationName: match[2],
+    }
+  }
+
+  return {
+    operationType: 'query',
+  }
+}
+
+function inferGraphqlVariableTypeHint(value: unknown): string {
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '[JSON]'
+    const first = inferGraphqlVariableTypeHint(value[0])
+    return `[${first}]`
+  }
+  if (value === null) return 'JSON'
+  if (typeof value === 'string') return 'String'
+  if (typeof value === 'number') return Number.isInteger(value) ? 'Int' : 'Float'
+  if (typeof value === 'boolean') return 'Boolean'
+  if (typeof value === 'object') return 'JSON'
+  return 'JSON'
+}
+
+function mergeTypeHint(existing: string | undefined, nextHint: string): string {
+  if (!existing || existing === nextHint) return nextHint
+  if (existing === 'JSON' || nextHint === 'JSON') return 'JSON'
+  if ((existing === 'Int' && nextHint === 'Float') || (existing === 'Float' && nextHint === 'Int')) {
+    return 'Float'
+  }
+  return 'JSON'
+}
+
+function extractGraphqlInfoFromBody(requestBody: any): {
+  operationType?: 'query' | 'mutation' | 'subscription'
+  operationName?: string
+  variableTypeHints?: Record<string, string>
+} | null {
+  if (!requestBody || typeof requestBody !== 'object' || Array.isArray(requestBody)) {
+    return null
+  }
+
+  const query = typeof requestBody.query === 'string' ? requestBody.query : ''
+  const explicitOperationName =
+    typeof requestBody.operationName === 'string' && requestBody.operationName.trim()
+      ? requestBody.operationName.trim()
+      : undefined
+
+  const parsed = parseGraphqlOperation(query)
+  const operationType = parsed.operationType
+  const operationName = explicitOperationName ?? parsed.operationName
+
+  const variableTypeHints: Record<string, string> = {}
+  if (requestBody.variables && typeof requestBody.variables === 'object' && !Array.isArray(requestBody.variables)) {
+    Object.entries(requestBody.variables as Record<string, unknown>).forEach(([key, value]) => {
+      variableTypeHints[key] = inferGraphqlVariableTypeHint(value)
+    })
+  }
+
+  return {
+    operationType,
+    operationName,
+    variableTypeHints: Object.keys(variableTypeHints).length > 0 ? variableTypeHints : undefined,
+  }
 }
 
 function stableSerialize(value: unknown): string {
@@ -178,6 +268,64 @@ function cleanupRequestCache(requestId: string) {
   responseMeta.delete(requestId)
 }
 
+function findMatchedRoute(details: any): ApiRoute | undefined {
+  const cleanUrl = getBaseUrl(details.url)
+  const routes = state.routes
+
+  const graphqlRoute = routes.find((route) => {
+    if (!route.enabled || route.parentId || !route.isGraphQL) return false
+    const endpoint = normalizeGraphqlEndpoint(route.graphqlEndpoint)
+    if (!endpoint) return false
+    return cleanUrl === endpoint
+  })
+  if (graphqlRoute) {
+    return graphqlRoute
+  }
+
+  let matchedRoute = routes.find((route) => {
+    if (!route.enabled || route.parentId || route.isAutoDetect || route.isGraphQL) return false
+    if (!route.pattern) return false
+    return matchesPattern(cleanUrl, route.pattern)
+  })
+
+  const autoDetectRoute = routes.find(
+    (route) =>
+      route.enabled && route.isAutoDetect && route.baseUrl && matchesBaseUrl(cleanUrl, route.baseUrl),
+  )
+
+  if (autoDetectRoute) {
+    const path = extractPath(cleanUrl)
+    const childRoute = routes.find(
+      (route) => route.parentId === autoDetectRoute.id && route.method === details.method && route.path === path,
+    )
+    if (childRoute) {
+      return childRoute
+    }
+    return autoDetectRoute
+  }
+
+  return matchedRoute
+}
+
+function hasCaptureCandidate(details: any): boolean {
+  const cleanUrl = getBaseUrl(details.url)
+  return state.routes.some((route) => {
+    if (!route.enabled || route.parentId) return false
+
+    if (route.isGraphQL) {
+      const endpoint = normalizeGraphqlEndpoint(route.graphqlEndpoint)
+      return !!endpoint && endpoint === cleanUrl
+    }
+
+    if (route.isAutoDetect) {
+      return !!route.baseUrl && matchesBaseUrl(cleanUrl, route.baseUrl)
+    }
+
+    if (!route.pattern) return false
+    return matchesPattern(cleanUrl, route.pattern)
+  })
+}
+
 function setupWebRequestListeners() {
   browser.webRequest.onHeadersReceived.addListener(
     (details) => {
@@ -197,7 +345,7 @@ function setupWebRequestListeners() {
 
   browser.webRequest.onBeforeRequest.addListener(
     (details) => {
-      if (details.tabId === -1 || !TRACKED_METHODS.has(details.method)) {
+      if (details.tabId === -1 || !TRACKED_METHODS.has(details.method) || !hasCaptureCandidate(details)) {
         return undefined
       }
 
@@ -256,7 +404,12 @@ function setupWebRequestListeners() {
 
   browser.webRequest.onBeforeRequest.addListener(
     (details) => {
-      if (!details.requestBody) {
+      if (
+        !details.requestBody ||
+        details.tabId === -1 ||
+        !TRACKED_METHODS.has(details.method) ||
+        !hasCaptureCandidate(details)
+      ) {
         return undefined
       }
 
@@ -291,35 +444,19 @@ function setupWebRequestListeners() {
               return
             }
 
-            const cleanUrl = getBaseUrl(details.url)
-            const routes = state.routes
+            let matchedRoute = findMatchedRoute(details)
 
-            let matchedRoute = routes.find((route) => {
-              if (!route.enabled || route.parentId || route.isAutoDetect) return false
-              if (!route.pattern) return false
-              return matchesPattern(cleanUrl, route.pattern)
-            })
-
-            const autoDetectRoute = routes.find(
-              (route) =>
-                route.enabled &&
-                route.isAutoDetect &&
-                route.baseUrl &&
-                matchesBaseUrl(cleanUrl, route.baseUrl),
-            )
-
-            if (autoDetectRoute) {
-              const path = extractPath(cleanUrl)
-
-              let childRoute = routes.find(
+            if (matchedRoute?.isAutoDetect && matchedRoute.baseUrl) {
+              const path = extractPath(getBaseUrl(details.url))
+              let childRoute = state.routes.find(
                 (route) =>
-                  route.parentId === autoDetectRoute.id &&
+                  route.parentId === matchedRoute?.id &&
                   route.method === details.method &&
                   route.path === path,
               )
 
               if (!childRoute) {
-                childRoute = await createChildRoute(autoDetectRoute, path, details.method)
+                childRoute = await createChildRoute(matchedRoute, path, details.method)
               }
 
               matchedRoute = childRoute
@@ -378,6 +515,16 @@ async function captureResponse(details: any, route: ApiRoute, requestId: string)
       return
     }
 
+    const graphqlInfo = route.isGraphQL ? extractGraphqlInfoFromBody(requestBody) : null
+    const variableTypeHints = graphqlInfo?.variableTypeHints
+    const mergedVariableTypeHints: Record<string, string> | undefined = variableTypeHints
+      ? Object.entries(variableTypeHints).reduce<Record<string, string>>((acc, [key, hint]) => {
+          const existing = acc[key]
+          acc[key] = mergeTypeHint(existing, hint)
+          return acc
+        }, {})
+      : undefined
+
     const recordedRequest: RecordedRequest = {
       id: `${Date.now()}-${Math.random()}`,
       routeId: route.id,
@@ -388,6 +535,9 @@ async function captureResponse(details: any, route: ApiRoute, requestId: string)
       statusCode: details.statusCode,
       queryParams: Object.keys(queryParams).length > 0 ? queryParams : undefined,
       requestBody,
+      graphqlOperationType: graphqlInfo?.operationType,
+      graphqlOperationName: graphqlInfo?.operationName,
+      graphqlVariableTypeHints: mergedVariableTypeHints,
     }
 
     state.requests.push(recordedRequest)
@@ -395,6 +545,7 @@ async function captureResponse(details: any, route: ApiRoute, requestId: string)
       state.requests.shift()
     }
 
+    typesDirty = true
     scheduleStorageFlush(['requests'])
   } catch (error) {
     console.error('Failed to capture response:', error)
@@ -440,6 +591,17 @@ function buildRouteTypeSignature(routeId: string, groups: BucketGroup[]): string
     samples: group.samples,
   }))
 
+  return fnv1aHash(stableSerialize({ routeId, normalized }))
+}
+
+function buildGraphqlTypeSignature(routeId: string, routeRequests: RecordedRequest[]): string {
+  const normalized = routeRequests.map((req) => ({
+    statusCode: req.statusCode ?? null,
+    operationType: req.graphqlOperationType ?? null,
+    operationName: req.graphqlOperationName ?? null,
+    variableTypeHints: req.graphqlVariableTypeHints ?? null,
+    response: req.response ?? null,
+  }))
   return fnv1aHash(stableSerialize({ routeId, normalized }))
 }
 
@@ -493,10 +655,34 @@ async function updateTypeDefinition(route: ApiRoute, allRequests: RecordedReques
     return false
   }
 
-  const signature = buildRouteTypeSignature(route.id, groups)
+  const signature = route.isGraphQL
+    ? buildGraphqlTypeSignature(route.id, routeRequests)
+    : buildRouteTypeSignature(route.id, groups)
   const existingType = state.types.find((item) => item.routeId === route.id)
   if (existingType?.signature === signature) {
     return false
+  }
+
+  if (route.isGraphQL) {
+    const graphqlSchema = generateGraphqlSchemaFromRequests(routeRequests, route.name)
+    const generatedType: GeneratedType = {
+      routeId: route.id,
+      routeName: route.name,
+      typeName: `${toTypeBaseName(route.name)}Schema`,
+      typeDefinition: graphqlSchema,
+      format: 'graphql',
+      sampleCount: routeRequests.length,
+      lastUpdated: Date.now(),
+      signature,
+    }
+
+    if (existingIndex >= 0) {
+      state.types[existingIndex] = generatedType
+    } else {
+      state.types.push(generatedType)
+    }
+
+    return true
   }
 
   const baseName = toTypeBaseName(route.name)
@@ -517,6 +703,7 @@ async function updateTypeDefinition(route: ApiRoute, allRequests: RecordedReques
     routeName: route.name,
     typeName: `${baseName}Response`,
     typeDefinition: await formatCode(mergedDefinitions),
+    format: 'typescript',
     sampleCount: routeRequests.length,
     lastUpdated: Date.now(),
     signature,
@@ -532,6 +719,10 @@ async function updateTypeDefinition(route: ApiRoute, allRequests: RecordedReques
 }
 
 async function regenerateAllTypes() {
+  if (!typesDirty) {
+    return
+  }
+
   let hasChanges = false
   for (const route of state.routes) {
     const changed = await updateTypeDefinition(route, state.requests)
@@ -543,6 +734,7 @@ async function regenerateAllTypes() {
   if (hasChanges) {
     scheduleStorageFlush(['types'], true)
   }
+  typesDirty = false
 }
 
 function setupMessageListeners() {
@@ -570,6 +762,7 @@ function setupMessageListeners() {
       state.routes = []
       state.requests = []
       state.types = []
+      typesDirty = true
       scheduleStorageFlush(['routes', 'requests', 'types'], true)
       sendResponse({ success: true })
       return true
@@ -577,18 +770,28 @@ function setupMessageListeners() {
 
     if (message.type === 'ADD_ROUTE') {
       const isAutoDetect = message.isAutoDetect === true
+      const isGraphQL = message.isGraphQL === true
+      const graphqlEndpoint = normalizeGraphqlEndpoint(message.graphqlEndpoint)
+
+      if (isGraphQL && !graphqlEndpoint) {
+        sendResponse({ success: false, error: 'Invalid GraphQL endpoint' })
+        return true
+      }
 
       const newRoute: ApiRoute = {
         id: `${Date.now()}-${Math.random()}`,
-        pattern: isAutoDetect ? '' : message.pattern,
+        pattern: isAutoDetect || isGraphQL ? '' : message.pattern,
         name: message.name,
         enabled: true,
         createdAt: Date.now(),
-        isAutoDetect,
+        isAutoDetect: isAutoDetect && !isGraphQL,
+        isGraphQL,
         baseUrl: isAutoDetect ? message.baseUrl : undefined,
+        graphqlEndpoint: isGraphQL ? graphqlEndpoint : undefined,
       }
 
       state.routes.push(newRoute)
+      typesDirty = true
       scheduleStorageFlush(['routes'])
       sendResponse({ success: true, route: newRoute })
       return true
@@ -606,6 +809,7 @@ function setupMessageListeners() {
       state.requests = state.requests.filter((request) => !routeIdsToDelete.has(request.routeId))
       state.types = state.types.filter((typeItem) => !routeIdsToDelete.has(typeItem.routeId))
 
+      typesDirty = true
       scheduleStorageFlush(['routes', 'requests', 'types'])
       sendResponse({ success: true })
       return true
@@ -630,6 +834,7 @@ function setupMessageListeners() {
     if (message.type === 'UPDATE_SETTINGS') {
       const sampleLimit = normalizeSampleLimit(message.sampleLimit)
       state.sampleLimit = sampleLimit
+      typesDirty = true
       scheduleStorageFlush(['sampleLimit'], true)
       sendResponse({ success: true, settings: { sampleLimit } })
       return true
@@ -688,6 +893,7 @@ function setupMessageListeners() {
       state.routes = state.routes.filter((r) => !matchingIds.has(r.id))
       state.routes.push(newRoute)
 
+      typesDirty = true
       scheduleStorageFlush(['routes', 'requests', 'types'])
       sendResponse({ success: true, route: newRoute, promotedCount: matchingChildren.length })
       return true

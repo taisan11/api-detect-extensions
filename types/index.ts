@@ -6,7 +6,9 @@ export interface ApiRoute {
   enabled: boolean;
   createdAt: number;
   isAutoDetect?: boolean; // 自動検出モード（ベースURLから派生ルートを自動作成）
+  isGraphQL?: boolean; // GraphQLエンドポイント監視モード
   baseUrl?: string; // 自動検出用のベースURL
+  graphqlEndpoint?: string; // GraphQLエンドポイントURL
   parentId?: string; // 親ルートのID（自動生成されたルートの場合）
   method?: string; // HTTPメソッド（自動生成されたルートの場合）
   path?: string; // パス（自動生成されたルートの場合）
@@ -23,6 +25,9 @@ export interface RecordedRequest {
   statusCode?: number;
   queryParams?: Record<string, string[]>; // URLパラメータ
   requestBody?: any; // リクエストボディ
+  graphqlOperationType?: 'query' | 'mutation' | 'subscription';
+  graphqlOperationName?: string;
+  graphqlVariableTypeHints?: Record<string, string>;
 }
 
 // 生成された型定義
@@ -31,6 +36,7 @@ export interface GeneratedType {
   routeName: string;
   typeName: string;
   typeDefinition: string;
+  format?: 'typescript' | 'graphql';
   sampleCount: number; // 何個のサンプルから生成したか
   lastUpdated: number;
   signature?: string; // 再生成スキップ用ハッシュ

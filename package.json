@@ -1,10 +1,10 @@
 {
-  "name": "wxt-starter",
+  "name": "api-detect-extension",
   "version": "0.0.0",
   "devDependencies": {
-    "@wxt-dev/auto-icons": "^1.1.0",
-    "typescript": "^5.9.3",
-    "wxt": "^0.20.17"
+    "@wxt-dev/auto-icons": "^1.1.1",
+    "typescript": "^6.0.2",
+    "wxt": "^0.20.20"
   },
   "description": "manifest.json description",
   "private": true,

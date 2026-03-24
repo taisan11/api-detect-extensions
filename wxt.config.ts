@@ -8,7 +8,7 @@ export default defineConfig({
   targetBrowsers: ["firefox"],
   manifest: {
     name: 'API Type Detector',
-    version: "0.0.3",
+    version: "0.0.4",
     description: 'Monitor API routes and generate TypeScript type definitions',
     // MV2 ではホスト権限も permissions 配列に含める
     permissions: [
@@ -24,6 +24,7 @@ export default defineConfig({
         // filterResponseData: Firefox 57+。安定した現行 ESR ベースラインとして 91.0 を指定
         strict_min_version: '91.0',
         // AMO提出用データ収集権限の申告（Firefox 128+）
+        // @ts-expect-error Firefox 128+ manifest key is not typed in current WXT types
         data_collection_permissions: {
           required: ["websiteActivity", "websiteContent"]
         }

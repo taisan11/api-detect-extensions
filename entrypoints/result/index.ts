@@ -222,6 +222,8 @@ function renderSelectedResult() {
   const method = getRouteMethod(route);
   const badgeClass = `method-${method.toLowerCase()}`;
   const displayPath = getRouteDisplayPath(route);
+  const graphqlOps = route.isGraphQL ? summarizeGraphqlOperations(requests) : null;
+  const typeLabel = typeInfo?.format === 'graphql' ? 'GraphQL Schema (SDL)' : 'TypeScript 型定義';
 
   results.innerHTML = `
     <div class="result-header">
@@ -232,6 +234,30 @@ function renderSelectedResult() {
     <div class="result-path">${escapeHtml(displayPath)}</div>
 
     ${renderUrlHistory(requests)}
+
+    ${graphqlOps ? `
+      <div class="subsection">
+        <div class="subsection-title">GraphQL Operations</div>
+        <table class="params-table">
+          <thead>
+            <tr>
+              <th>Operation</th>
+              <th>Type</th>
+              <th>出現回数</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${graphqlOps.map(op => `
+              <tr>
+                <td class="param-name">${escapeHtml(op.name)}</td>
+                <td><span class="type-badge">${escapeHtml(op.type)}</span></td>
+                <td>${op.count}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    ` : ''}
 
     ${paramList.length > 0 ? `
       <div class="subsection">
@@ -265,7 +291,7 @@ function renderSelectedResult() {
 
     ${typeInfo ? `
       <div class="subsection">
-        <div class="subsection-title">TypeScript 型定義</div>
+        <div class="subsection-title">${typeLabel}</div>
         <div class="type-definition">
           <pre>${escapeHtml(typeInfo.typeDefinition)}</pre>
           <button class="copy-btn" data-copy="${escapeHtml(typeInfo.typeDefinition)}">📋 コピー</button>
@@ -532,7 +558,7 @@ function getRouteExplorerInfo(route: ApiRoute) {
 }
 
 function getRouteMethod(route: ApiRoute): string {
-  return (route.method || (route.isAutoDetect ? 'AUTO' : 'ANY')).toUpperCase();
+  return (route.method || (route.isGraphQL ? 'GQL' : (route.isAutoDetect ? 'AUTO' : 'ANY'))).toUpperCase();
 }
 
 function getRouteDisplayPath(route: ApiRoute): string {
@@ -548,7 +574,28 @@ function getRouteDisplayPath(route: ApiRoute): string {
     }
     return route.path;
   }
-  return route.baseUrl || route.pattern || '(パス未設定)';
+  return route.graphqlEndpoint || route.baseUrl || route.pattern || '(パス未設定)';
+}
+
+function summarizeGraphqlOperations(requests: RecordedRequest[]): Array<{ name: string; type: string; count: number }> {
+  const map = new Map<string, { name: string; type: string; count: number }>();
+  requests.forEach((request) => {
+    const operationName = request.graphqlOperationName || 'Anonymous';
+    const operationType = request.graphqlOperationType || 'query';
+    const key = `${operationType}:${operationName}`;
+    const item = map.get(key);
+    if (item) {
+      item.count += 1;
+      return;
+    }
+    map.set(key, {
+      name: operationName,
+      type: operationType,
+      count: 1,
+    });
+  });
+
+  return Array.from(map.values()).sort((a, b) => `${a.type}:${a.name}`.localeCompare(`${b.type}:${b.name}`));
 }
 
 type FolderNode = {

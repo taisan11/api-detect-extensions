@@ -29,6 +29,10 @@
             <input type="radio" name="mode" value="auto" />
             自動検出モード
           </label>
+          <label>
+            <input type="radio" name="mode" value="graphql" />
+            GraphQLモード
+          </label>
         </div>
         <div class="form" id="patternForm">
           <input type="text" id="routeName" placeholder="Route名 (例: User API)" />
@@ -40,8 +44,14 @@
           <input type="text" id="autoRouteUrl" placeholder="ベースURL (例: https://example.com/api)" />
           <button id="addAutoRoute">追加</button>
         </div>
+        <div class="form" id="graphqlForm" style="display: none;">
+          <input type="text" id="graphqlRouteName" placeholder="Route名 (例: GitHub GraphQL)" />
+          <input type="text" id="graphqlEndpoint" placeholder="GraphQL Endpoint (例: https://api.github.com/graphql)" />
+          <button id="addGraphqlRoute">追加</button>
+        </div>
         <p class="hint" id="patternHint">パターンモード: URLパターンを指定します。:id や :userId などでパラメータを指定できます（例: /api/users/:id/posts）</p>
         <p class="hint" id="autoHint" style="display: none;">自動検出モード: ベースURLを登録すると、そこから派生するエンドポイントとメソッドを自動的に検出・分類します</p>
+        <p class="hint" id="graphqlHint" style="display: none;">GraphQLモード: エンドポイントを指定すると operation / variables / response を解析し、GraphQL Schema (SDL) を生成します</p>
       </div>
 
       <div class="section">

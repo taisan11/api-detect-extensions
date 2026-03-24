@@ -23,19 +23,32 @@ function setupEventListeners() {
     radio.addEventListener('change', () => {
       const patternForm = document.getElementById('patternForm')!;
       const autoForm = document.getElementById('autoForm')!;
+      const graphqlForm = document.getElementById('graphqlForm')!;
       const patternHint = document.getElementById('patternHint')!;
       const autoHint = document.getElementById('autoHint')!;
+      const graphqlHint = document.getElementById('graphqlHint')!;
       
       if (radio.value === 'auto') {
         patternForm.style.display = 'none';
         autoForm.style.display = 'flex';
+        graphqlForm.style.display = 'none';
         patternHint.style.display = 'none';
         autoHint.style.display = 'block';
+        graphqlHint.style.display = 'none';
+      } else if (radio.value === 'graphql') {
+        patternForm.style.display = 'none';
+        autoForm.style.display = 'none';
+        graphqlForm.style.display = 'flex';
+        patternHint.style.display = 'none';
+        autoHint.style.display = 'none';
+        graphqlHint.style.display = 'block';
       } else {
         patternForm.style.display = 'flex';
         autoForm.style.display = 'none';
+        graphqlForm.style.display = 'none';
         patternHint.style.display = 'block';
         autoHint.style.display = 'none';
+        graphqlHint.style.display = 'none';
       }
     });
   });
@@ -43,6 +56,7 @@ function setupEventListeners() {
   // ルート登録
   document.getElementById('addRoute')?.addEventListener('click', addRoute);
   document.getElementById('addAutoRoute')?.addEventListener('click', addAutoRoute);
+  document.getElementById('addGraphqlRoute')?.addEventListener('click', addGraphqlRoute);
   document.getElementById('saveSampleLimitBtn')?.addEventListener('click', saveSampleLimit);
 
   // URL ツール
@@ -151,11 +165,11 @@ function renderRouteList() {
   }
 
   list.innerHTML = routes.map(route => {
-    const method = (route.method || (route.isAutoDetect ? 'AUTO' : 'ANY')).toUpperCase();
+    const method = (route.method || (route.isGraphQL ? 'GQL' : (route.isAutoDetect ? 'AUTO' : 'ANY'))).toUpperCase();
     const badgeClass = `method-${method.toLowerCase()}`;
     const path = route.path
       ? route.path
-      : (route.baseUrl || route.pattern || '');
+      : (route.graphqlEndpoint || route.baseUrl || route.pattern || '');
 
     return `
       <div class="route-row">
@@ -236,6 +250,43 @@ async function addAutoRoute() {
     alert('Routeを追加しました');
     loadRoutes();
   }
+}
+
+async function addGraphqlRoute() {
+  const nameInput = document.getElementById('graphqlRouteName') as HTMLInputElement;
+  const endpointInput = document.getElementById('graphqlEndpoint') as HTMLInputElement;
+
+  const name = nameInput.value.trim();
+  const graphqlEndpoint = endpointInput.value.trim();
+
+  if (!name || !graphqlEndpoint) {
+    alert('名前とGraphQLエンドポイントを入力してください');
+    return;
+  }
+
+  try {
+    new URL(graphqlEndpoint);
+  } catch (e) {
+    alert('有効なGraphQLエンドポイントURLを入力してください');
+    return;
+  }
+
+  const response = await browser.runtime.sendMessage({
+    type: 'ADD_ROUTE',
+    name,
+    graphqlEndpoint,
+    isGraphQL: true,
+  });
+
+  if (response.success) {
+    nameInput.value = '';
+    endpointInput.value = '';
+    alert('GraphQL Routeを追加しました');
+    loadRoutes();
+    return;
+  }
+
+  alert(`Route追加に失敗しました: ${response?.error ?? 'unknown error'}`);
 }
 
 function escapeHtml(text: string): string {
