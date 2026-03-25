@@ -1,4 +1,5 @@
 import type { ApiRoute, AppSettings, GeneratedType, RecordedRequest, StorageData } from '@/types'
+import { type OperationDefinitionNode, type OperationTypeNode, parse, type TypeNode } from 'graphql'
 import { extractQueryParams } from '@/utils/paramCollector'
 import { formatCode } from '@/utils/format'
 import { generateGraphqlSchemaFromRequests } from '@/utils/graphqlSchemaGenerator'
@@ -91,23 +92,63 @@ function normalizeGraphqlEndpoint(value: unknown): string | undefined {
   }
 }
 
-function parseGraphqlOperation(query: string): {
-  operationType?: 'query' | 'mutation' | 'subscription'
-  operationName?: string
-} {
-  const compact = query.replace(/#[^\n\r]*/g, ' ').replace(/\s+/g, ' ').trim()
-  if (!compact) return {}
+function operationTypeFromNode(node: OperationTypeNode): 'query' | 'mutation' | 'subscription' {
+  return node
+}
 
-  const match = compact.match(/\b(query|mutation|subscription)\b\s*([A-Za-z_][A-Za-z0-9_]*)?/)
-  if (match) {
-    return {
-      operationType: match[1] as 'query' | 'mutation' | 'subscription',
-      operationName: match[2],
-    }
+function graphqlTypeNodeToHint(node: TypeNode): string {
+  if (node.kind === 'NamedType') {
+    return node.name.value
   }
 
-  return {
-    operationType: 'query',
+  if (node.kind === 'ListType') {
+    return `[${graphqlTypeNodeToHint(node.type)}]`
+  }
+
+  if (node.kind === 'NonNullType') {
+    return graphqlTypeNodeToHint(node.type)
+  }
+
+  return 'JSON'
+}
+
+function parseGraphqlOperation(query: string, preferredOperationName?: string): {
+  operationType?: 'query' | 'mutation' | 'subscription'
+  operationName?: string
+  variableTypeHints?: Record<string, string>
+  documentHash?: string
+} {
+  const normalized = query.trim()
+  if (!normalized) return {}
+
+  try {
+    const document = parse(normalized, { noLocation: true })
+    const operations = document.definitions.filter(
+      (definition): definition is OperationDefinitionNode => definition.kind === 'OperationDefinition',
+    )
+    if (operations.length === 0) {
+      return {}
+    }
+
+    const namedPreferred = preferredOperationName?.trim()
+    const selected =
+      (namedPreferred
+        ? operations.find((operation) => operation.name?.value === namedPreferred)
+        : undefined) ?? operations[0]
+
+    const variableTypeHints: Record<string, string> = {}
+    selected.variableDefinitions?.forEach((variable) => {
+      variableTypeHints[variable.variable.name.value] = graphqlTypeNodeToHint(variable.type)
+    })
+
+    return {
+      operationType: operationTypeFromNode(selected.operation),
+      operationName: selected.name?.value,
+      variableTypeHints: Object.keys(variableTypeHints).length > 0 ? variableTypeHints : undefined,
+      documentHash: fnv1aHash(normalized),
+    }
+  } catch {
+    return {}
   }
 }
 
@@ -137,6 +178,7 @@ function mergeTypeHint(existing: string | undefined, nextHint: string): string {
 function extractGraphqlInfoFromBody(requestBody: any): {
   operationType?: 'query' | 'mutation' | 'subscription'
   operationName?: string
+  documentHash?: string
   variableTypeHints?: Record<string, string>
 } | null {
   if (!requestBody || typeof requestBody !== 'object' || Array.isArray(requestBody)) {
@@ -149,20 +191,31 @@ function extractGraphqlInfoFromBody(requestBody: any): {
       ? requestBody.operationName.trim()
       : undefined
 
-  const parsed = parseGraphqlOperation(query)
-  const operationType = parsed.operationType
+  const parsed = parseGraphqlOperation(query, explicitOperationName)
+  const operationType = parsed.operationType ?? 'query'
   const operationName = explicitOperationName ?? parsed.operationName
 
   const variableTypeHints: Record<string, string> = {}
-  if (requestBody.variables && typeof requestBody.variables === 'object' && !Array.isArray(requestBody.variables)) {
+  if (parsed.variableTypeHints) {
+    Object.entries(parsed.variableTypeHints).forEach(([key, hint]) => {
+      variableTypeHints[key] = hint
+    })
+  }
+
+  if (
+    requestBody.variables &&
+    typeof requestBody.variables === 'object' &&
+    !Array.isArray(requestBody.variables)
+  ) {
     Object.entries(requestBody.variables as Record<string, unknown>).forEach(([key, value]) => {
-      variableTypeHints[key] = inferGraphqlVariableTypeHint(value)
+      variableTypeHints[key] = mergeTypeHint(variableTypeHints[key], inferGraphqlVariableTypeHint(value))
     })
   }
 
   return {
     operationType,
     operationName,
+    documentHash: parsed.documentHash,
     variableTypeHints: Object.keys(variableTypeHints).length > 0 ? variableTypeHints : undefined,
   }
 }
@@ -537,6 +590,7 @@ async function captureResponse(details: any, route: ApiRoute, requestId: string)
       requestBody,
       graphqlOperationType: graphqlInfo?.operationType,
       graphqlOperationName: graphqlInfo?.operationName,
+      graphqlDocumentHash: graphqlInfo?.documentHash,
       graphqlVariableTypeHints: mergedVariableTypeHints,
     }
 
@@ -597,6 +651,7 @@ function buildRouteTypeSignature(routeId: string, groups: BucketGroup[]): string
 function buildGraphqlTypeSignature(routeId: string, routeRequests: RecordedRequest[]): string {
   const normalized = routeRequests.map((req) => ({
     statusCode: req.statusCode ?? null,
+    documentHash: req.graphqlDocumentHash ?? null,
     operationType: req.graphqlOperationType ?? null,
     operationName: req.graphqlOperationName ?? null,
     variableTypeHints: req.graphqlVariableTypeHints ?? null,

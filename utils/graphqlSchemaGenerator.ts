@@ -3,6 +3,7 @@ import type { RecordedRequest } from '@/types'
 type OperationKind = 'query' | 'mutation' | 'subscription'
 
 type OperationAggregate = {
+  operationId: string
   operationName: string
   operationType: OperationKind
   responses: any[]
@@ -63,6 +64,22 @@ function mergeVariableTypeHint(existing: string | undefined, nextHint: string): 
     return 'Float'
   }
   return 'JSON'
+}
+
+function sanitizeGraphqlType(hint: string): string {
+  const trimmed = hint.trim()
+  if (!trimmed) return 'JSON'
+
+  const nonNull = trimmed.endsWith('!') ? trimmed.slice(0, -1) : trimmed
+  if (nonNull.startsWith('[') && nonNull.endsWith(']')) {
+    const inner = sanitizeGraphqlType(nonNull.slice(1, -1))
+    return `[${inner}]`
+  }
+
+  const core = nonNull.replace(/[^_A-Za-z0-9]/g, '')
+  if (!core) return 'JSON'
+  if (/^\d/.test(core)) return `_${core}`
+  return core
 }
 
 function inferScalarType(values: unknown[]): string {
@@ -181,10 +198,14 @@ export function generateGraphqlSchemaFromRequests(requests: RecordedRequest[], r
     const operationName = request.graphqlOperationName?.trim()
       ? request.graphqlOperationName.trim()
       : `Anonymous${operationType.charAt(0).toUpperCase()}${operationType.slice(1)}${++anonymousCounter}`
-    const key = `${operationType}:${operationName}`
+    const operationId = request.graphqlDocumentHash?.trim()
+      ? request.graphqlDocumentHash.trim()
+      : `${operationType}:${operationName}`
+    const key = `${operationType}:${operationId}:${operationName}`
 
     if (!operationMap.has(key)) {
       operationMap.set(key, {
+        operationId,
         operationName,
         operationType,
         responses: [],
@@ -243,7 +264,7 @@ export function generateGraphqlSchemaFromRequests(requests: RecordedRequest[], r
 
       const args = Object.entries(operation.variableTypeHints)
         .sort(([a], [b]) => a.localeCompare(b))
-        .map(([name, hint], argIndex) => `${toGraphqlName(name, `arg${argIndex + 1}`)}: ${normalizeVariableTypeHint(hint)}`)
+        .map(([name, hint], argIndex) => `${toGraphqlName(name, `arg${argIndex + 1}`)}: ${sanitizeGraphqlType(normalizeVariableTypeHint(hint))}`)
         .join(', ')
       const fieldSignature = `${fieldName}${args ? `(${args})` : ''}: ${resultTypeName}`
 

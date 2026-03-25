@@ -27,6 +27,7 @@ export interface RecordedRequest {
   requestBody?: any; // リクエストボディ
   graphqlOperationType?: 'query' | 'mutation' | 'subscription';
   graphqlOperationName?: string;
+  graphqlDocumentHash?: string;
   graphqlVariableTypeHints?: Record<string, string>;
 }
 
